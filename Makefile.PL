@@ -9,17 +9,16 @@ perl_version '5.008001';
 
 my $deps = {
   requires => {
-    'Class::Base'              => '0',
-    'Class::Data::Inheritable' => '0.02',
     'Digest::SHA'              => '0',
     'Carp::Clan'               => '0',
-    'IO::Scalar'               => '2.110',
     'Parse::RecDescent'        => '1.967009',
-    'DBI'                      => '0',
+    'DBI'                      => '1.54',
     'File::ShareDir'           => '1.0',
-    'File::Spec'               => '0',
-    'XML::Writer'              => '0.500',
-    'Moo'                      => '0.009007',
+    'Moo'                      => '1.000003',
+    'Package::Variant'         => '1.001001',
+    'Sub::Quote'               => '0',
+    'Try::Tiny'                => '0.04',
+    'Scalar::Util'             => '0',
   },
   recommends => {
     'Template'                 => '2.20',
@@ -27,15 +26,17 @@ my $deps = {
     'GraphViz'                 => '0',
     'Graph::Directed'          => '0',
     'Spreadsheet::ParseExcel'  => '0.41',
-    'Text::ParseWords'         => '0',
     'Text::RecordParser'       => '0.02',
     'XML::LibXML'              => '1.69',
   },
   test_requires => {
+    'JSON'                     => '2.0',
     'YAML'                     => '0.66',
+    'XML::Writer'              => '0.500',
     'Test::More'               => '0.88',
     'Test::Differences'        => '0',
     'Test::Exception'          => '0.31',
+    'Text::ParseWords'         => '0',
   },
 };
 
@@ -43,30 +44,25 @@ my $deps = {
 name        'SQL-Translator';
 author      'Ken Youens-Clark <kclark@cpan.org>';
 abstract    'SQL DDL transformations and more';
-license     'gpl';
-repository  'git://git.shadowcat.co.uk/dbsrgits/SQL-Translator.git';
-bugtracker  'http://rt.cpan.org/NoAuth/Bugs.html?Dist=SQL-Translator';
+license     'perl';
 
-resources Ratings => 'http://cpanratings.perl.org/d/SQL-Translator';
+resources    repository => 'https://github.com/dbsrgits/sql-translator/';
+resources    bugtracker => 'https://rt.cpan.org/NoAuth/Bugs.html?Dist=SQL-Translator';
+resources    Ratings    => 'http://cpanratings.perl.org/d/SQL-Translator';
+resources    IRC        => 'irc://irc.perl.org/#sql-translator';
 
 Meta->{values}{x_authority} = 'cpan:JROBINSON';
 
 all_from    'lib/SQL/Translator.pm';
+readme_from 'lib/SQL/Translator.pm';
 
 for my $type (qw/requires recommends test_requires/) {
   no strict qw/refs/;
   my $f = \&$type;
-  for my $mod (keys %{$deps->{$type} || {} }) {
+  for my $mod (sort keys %{$deps->{$type} || {} }) {
     $f->($mod, $deps->{$type}{$mod});
   }
 }
-
-no_index directory => $_ for (qw|
-  lib/SQL/Translator/Schema/Graph
-|);
-no_index package => $_ for (qw|
-  SQL::Translator::Schema::Graph
-|);
 
 install_script (qw|
   script/sqlt-diagram
@@ -196,21 +192,19 @@ sub _recreate_rt_source {
   };
 
   if ($@) {
-    warn <<EOE;
+    die <<EOE;
 
 =========================================================================
 ===============              WARNING !!!                =================
 =========================================================================
 
 Unable to update the roundtrip schema (attempt triggered by AUTHOR mode).
-We will still generate a Makefile, but be aware that if you build a dist
-this way, it *WILL* be broken.
+Aborting Makefile generation, please fix the errors indicated below
+(typically by installing the missing modules).
 
 -------------------------------------------------------------------------
 $@
 
-Press Enter to continue.
 EOE
-  <>;
   }
 }

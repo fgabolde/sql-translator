@@ -248,8 +248,7 @@ sub produce_diff_sql {
             my $meth = $producer_class->can($_);
 
             $meth ? map {
-                    my $sql = $meth->( (ref $_ eq 'ARRAY' ? @$_ : $_), $self->producer_args );
-                    $sql ?  ("$sql") : ();
+                    map { $_ ? "$_" : () } $meth->( (ref $_ eq 'ARRAY' ? @$_ : $_), $self->producer_args );
                   } @{ $flattened_diffs{$_} }
                   : $self->ignore_missing_methods
                   ? "-- $producer_class cant $_"
@@ -308,7 +307,7 @@ sub produce_diff_sql {
       }
 
       my @return =
-        map { $_ ? ( $_ =~ /;$/xms ? $_ : "$_;\n\n" ) : "\n" }
+        map { $_ ? ( $_ =~ /;\s*\z/xms ? $_ : "$_;\n\n" ) : "\n" }
         ("-- Convert schema '$src_name' to '$tar_name':", @diffs);
 
       return wantarray ? @return : join('', @return);
@@ -382,7 +381,7 @@ sub diff_table_constraints {
 sub diff_table_fields {
   my ($self, $src_table, $tar_table) = @_;
 
-  # List of ones ew've renamed from so we dont drop them
+  # List of ones we've renamed from so we don't drop them
   my %renamed_source_fields;
 
   for my $tar_table_field ( $tar_table->get_fields ) {
@@ -443,7 +442,7 @@ sub diff_table_options {
     my ($a_name, undef, $b_name, undef) = ( %$a, %$b );
     $a_name cmp $b_name;
   };
-  # Need to sort the options so we dont get supruious diffs.
+  # Need to sort the options so we don't get spurious diffs.
   my (@src_opts, @tar_opts);
   @src_opts = sort $cmp $src_table->options;
   @tar_opts = sort $cmp $tar_table->options;
@@ -472,7 +471,7 @@ SQL::Translator::Diff - determine differences between two schemas
 =head1 DESCRIPTION
 
 Takes two input SQL::Translator::Schemas (or SQL files) and produces ALTER
-statments to make them the same
+statements to make them the same
 
 =head1 SNYOPSIS
 
@@ -521,6 +520,11 @@ supports the ability to do all alters for a table as one statement.
 If the diff would need a method that is missing from the producer, just emit a
 comment showing the method is missing, rather than dieing with an error
 
+=item B<producer_args>
+
+Hash of extra arguments passed to L<SQL::Translator/new> and the below
+L</PRODUCER FUNCTIONS>.
+
 =back
 
 =head1 PRODUCER FUNCTIONS
@@ -531,34 +535,35 @@ thrown.
 
 =over
 
-=item * C<alter_create_constraint($con)>
+=item * C<alter_create_constraint($con, $args)>
 
-=item * C<alter_drop_constraint($con)>
+=item * C<alter_drop_constraint($con, $args)>
 
-=item * C<alter_create_index($idx)>
+=item * C<alter_create_index($idx, $args)>
 
-=item * C<alter_drop_index($idx)>
+=item * C<alter_drop_index($idx, $args)>
 
-=item * C<add_field($fld)>
+=item * C<add_field($fld, $args)>
 
-=item * C<alter_field($old_fld, $new_fld)>
+=item * C<alter_field($old_fld, $new_fld, $args)>
 
-=item * C<rename_field($old_fld, $new_fld)>
+=item * C<rename_field($old_fld, $new_fld, $args)>
 
-=item * C<drop_field($fld)>
+=item * C<drop_field($fld, $args)>
 
-=item * C<alter_table($table)>
+=item * C<alter_table($table, $args)>
 
-=item * C<drop_table($table)>
+=item * C<drop_table($table, $args)>
 
-=item * C<rename_table($old_table, $new_table)> (optional)
+=item * C<rename_table($old_table, $new_table, $args)> (optional)
 
-=item * C<batch_alter_table($table, $hash)> (optional)
+=item * C<batch_alter_table($table, $hash, $args)> (optional)
 
 If the producer supports C<batch_alter_table>, it will be called with the
 table to alter and a hash, the keys of which will be the method names listed
 above; values will be arrays of fields or constraints to operate on. In the
-case of the field functions that take two arguments this will appear as a hash.
+case of the field functions that take two arguments this will appear as an
+array reference.
 
 I.e. the hash might look something like the following:
 
@@ -569,11 +574,11 @@ I.e. the hash might look something like the following:
  }
 
 
-=item * C<preprocess_schema($class, $schema)> (optional)
+=item * C<preprocess_schema($schema)> (optional)
 
 C<preprocess_schema> is called by the Diff code to allow the producer to
 normalize any data it needs to first. For example, the MySQL producer uses
-this method to ensure that FK contraint names are unique.
+this method to ensure that FK constraint names are unique.
 
 Basicaly any changes that need to be made to produce the SQL file for the
 schema should be done here, so that a diff between a parsed SQL file and (say)

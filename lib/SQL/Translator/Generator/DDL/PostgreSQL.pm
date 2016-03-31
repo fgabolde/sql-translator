@@ -10,9 +10,14 @@ engine.
 I<documentation volunteers needed>
 
 =cut
+
 use Moo;
 
-has quote_chars => (is => 'rw', default => sub { +[qw(" ")] } );
+has quote_chars => (
+  is => 'rw',
+  default => sub { +[qw(" ")] },
+  trigger => sub { $_[0]->clear_escape_char },
+);
 
 with 'SQL::Translator::Generator::Role::Quote';
 

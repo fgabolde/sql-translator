@@ -48,10 +48,10 @@ allows you to write the result for each table to a separate file.
 It needs one additional producer_arg of C<tt_table> which is the file
 name of the template to use.  This template will be passed a template
 var of C<table>, which is the current
-L<SQL::Translator::Producer::Table> table we are producing, which you
-can then use to walk the schema via the methods documented in that
-module. You also get L<schema> as a shortcut to the
-L<SQL::Translator::Producer::Schema> for the table and C<translator>,
+L<SQL::Translator::Schema::Table> table we are producing,
+which you can then use to walk the schema via the methods documented
+in that module. You also get C<schema> as a shortcut to the
+L<SQL::Translator::Schema> for the table and C<translator>,
 the L<SQL::Translator> object for this parse in case you want to get
 access to any of the options etc set here.
 
@@ -65,7 +65,7 @@ Here's a brief example of what the template could look like:
 
 See F<t/data/template/table.tt> for a more complete example.
 
-You can also set any of the options used to initiallize the Template
+You can also set any of the options used to initialize the Template
 object by adding them to your producer_args. See Template Toolkit docs
 for details of the options.
 
@@ -82,7 +82,7 @@ If you set C<mk_files> and its additional options the producer will
 write a separate file for each table in the schema. This is useful for
 producing things like HTML documentation where every table gets its
 own page (you could also use TTSchema producer to add an index page).
-Its also particulary good for code generation where you want to
+It's also particularly good for code generation where you want to
 produce a class file per table.
 
 =head1 OPTIONS
@@ -123,12 +123,12 @@ where we want to write our output. One of "skip", "die", "replace",
 B<replace> - Over-write the existing file with the new one, clobbering
 anything already there.
 
-B<skip> - Leave the origional file as it was and don't write the new
+B<skip> - Leave the original file as it was and don't write the new
 version anywhere.
 
 B<die> - Die with an existing file error.
 
-B<insert> - Insert the generated output into the file bewteen a set of
+B<insert> - Insert the generated output into the file between a set of
 special comments (defined by the following options.) Any code between
 the comments will be overwritten (ie the results from a previous
 produce) but the rest of the file is left alone (your custom code).
@@ -246,7 +246,7 @@ sub write_file {
         }
     }
 
-    my ($dir) = $file =~ m!^(.*)/!; # Want greedy, eveything before the last /
+    my ($dir) = $file =~ m!^(.*)/!; # Want greedy, everything before the last /
    if ( $dir and not -d $dir and $pargs->{mk_file_dir} ) { mkpath($dir); }
 
     debug "Writing to $file\n";
@@ -263,7 +263,7 @@ sub insert_code {
     my $cstart = $pargs->{insert_comment_start} || "SQLF_INSERT_START";
     my $cend   = $pargs->{insert_comment_end}   || "SQLF_INSERT_END";
 
-    # Slurp in the origional file
+    # Slurp in the original file
     open ( FILE, "<", "$file") or die "Error opening file $file : $!\n";
     local $/ = undef;
     my $orig = <FILE>;
@@ -290,13 +290,14 @@ Mark Addison E<lt>grommit@users.sourceforge.netE<gt>.
 =head1 TODO
 
 - Some tests for the various on exists options (they have been tested
-implicitley through use in a project but need some proper tests).
+implicitly through use in a project but need some proper tests).
 
 - More docs on code generation strategies.
 
 - Better hooks for filename generation.
 
-- Integrate with L<TT::Base> and L<TTSchema>.
+- Integrate with L<TT::Base|SQL::Translator::Producer::TT::Base> and
+  L<TTSchema|SQL::Translator::Producer::TTSchema>.
 
 =head1 SEE ALSO
 

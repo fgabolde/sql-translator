@@ -14,7 +14,7 @@ use FindBin qw/$Bin/;
 #=============================================================================
 
 BEGIN {
-    maybe_plan(53,
+    maybe_plan(undef,
         'SQL::Translator::Producer::PostgreSQL',
         'Test::Differences',
     )
@@ -25,8 +25,10 @@ use SQL::Translator;
 my $PRODUCER = \&SQL::Translator::Producer::PostgreSQL::create_field;
 
 {
-  my $table = SQL::Translator::Schema::Table->new( name => 'foo.bar' );
+  my $table = SQL::Translator::Schema::Table->new( name => 'foo.bar',
+                                                   comments => [ "multi\nline",'single line' ] );
   my $field = SQL::Translator::Schema::Field->new( name => 'baz',
+                                                 comments => [ "multi\nline",'single line' ],
                                                  table => $table,
                                                  data_type => 'VARCHAR',
                                                  size => 10,
@@ -39,7 +41,25 @@ my $PRODUCER = \&SQL::Translator::Producer::PostgreSQL::create_field;
   my ($create, $fks) = SQL::Translator::Producer::PostgreSQL::create_table($table, { quote_table_names => q{"} });
   is($table->name, 'foo.bar');
 
-  my $expected = "--\n-- Table: foo.bar\n--\nCREATE TABLE \"foo\".\"bar\" (\n  \"baz\" character varying(10) DEFAULT 'quux' NOT NULL\n)";
+  my $expected = <<EOESQL;
+--
+-- Table: foo.bar
+--
+
+-- Comments:
+-- multi
+-- line
+-- single line
+--
+CREATE TABLE "foo"."bar" (
+  -- multi
+  -- line
+  -- single line
+  "baz" character varying(10) DEFAULT 'quux' NOT NULL
+)
+EOESQL
+
+  $expected =~ s/\n\z//;
   is($create, $expected);
 }
 
@@ -143,13 +163,45 @@ for my $name ( 'foo', undef ) {
     }
     else {
         is($fk_constraint_fk_ref->[0], 'ALTER TABLE mytable ADD FOREIGN KEY (myfield)
-  REFERENCES mytable2 (myfield_2) DEFERRABLE', 'Create named Foreign Key Constraint works');
+  REFERENCES mytable2 (myfield_2) DEFERRABLE', 'Create un-named Foreign Key Constraint works');
 
         my $alter_fk_constraint = SQL::Translator::Producer::PostgreSQL::alter_drop_constraint($fk_constraint);
-        is($alter_fk_constraint, 'ALTER TABLE mytable DROP CONSTRAINT mytable_myfield_fkey', 'Alter drop named Foreign Key constraint works');
+        is($alter_fk_constraint, 'ALTER TABLE mytable DROP CONSTRAINT mytable_myfield_fkey', 'Alter drop un-named Foreign Key constraint works');
     }
 }
 
+# check named, and unnamed primary keys
+for my $name ( 'foo', undef ) {
+    my $pk_constraint = SQL::Translator::Schema::Constraint->new(
+        table => $table,
+        name   => $name,
+        fields => [qw(myfield)],
+        type   => 'PRIMARY_KEY',
+    );
+    my $pk_constraint_2 = SQL::Translator::Schema::Constraint->new(
+        table => $table,
+        name   => $name,
+        fields => [qw(myfield)],
+        type   => 'PRIMARY_KEY',
+    );
+
+    my  ($pk_constraint_def_ref, $pk_constraint_pk_ref ) = SQL::Translator::Producer::PostgreSQL::create_constraint($pk_constraint);
+
+    if ( $name ) {
+        is($pk_constraint_def_ref->[0], "CONSTRAINT $name PRIMARY KEY (myfield)", 'Create Primary Key Constraint works');
+
+        # ToDo: may we should check if the constraint name was valid, or if next
+        #       unused_name created has choosen a different one
+        my $alter_pk_constraint = SQL::Translator::Producer::PostgreSQL::alter_drop_constraint($pk_constraint);
+        is($alter_pk_constraint, "ALTER TABLE mytable DROP CONSTRAINT $name", 'Alter drop Primary Key constraint works');
+    }
+    else {
+        is($pk_constraint_def_ref->[0], 'PRIMARY KEY (myfield)', 'Create un-named Primary Key Constraint works');
+
+        my $alter_pk_constraint = SQL::Translator::Producer::PostgreSQL::alter_drop_constraint($pk_constraint);
+        is($alter_pk_constraint, 'ALTER TABLE mytable DROP CONSTRAINT mytable_pkey', 'Alter drop un-named Foreign Key constraint works');
+    }
+}
 
 my $alter_field = SQL::Translator::Producer::PostgreSQL::alter_field($field1,
                                                                 $field2);
@@ -197,6 +249,37 @@ is($add_field, 'ALTER TABLE mytable ADD COLUMN field3 character varying(10)', 'A
 
 my $drop_field = SQL::Translator::Producer::PostgreSQL::drop_field($field2);
 is($drop_field, 'ALTER TABLE mytable DROP COLUMN myfield', 'Drop field works');
+
+my $field_serial = SQL::Translator::Schema::Field->new( name => 'serial_field',
+                                                  table => $table,
+                                                  data_type => 'INT',
+                                                  is_auto_increment => 1,
+                                                  is_nullable => 0 );
+
+my $field_serial_sql = SQL::Translator::Producer::PostgreSQL::create_field($field_serial);
+
+is($field_serial_sql, 'serial_field serial NOT NULL', 'Create serial field works');
+
+my $field_bigserial = SQL::Translator::Schema::Field->new( name => 'bigserial_field',
+                                                  table => $table,
+                                                  data_type => 'BIGINT',
+                                                  is_auto_increment => 1,
+                                                  is_nullable => 0 );
+
+my $field_bigserial_sql = SQL::Translator::Producer::PostgreSQL::create_field($field_bigserial);
+
+is($field_bigserial_sql, 'bigserial_field bigserial NOT NULL', 'Create bigserial field works (from bigint type)');
+
+$field_bigserial = SQL::Translator::Schema::Field->new( name => 'bigserial_field',
+                                                  table => $table,
+                                                  data_type => 'INT',
+                                                  is_auto_increment => 1,
+                                                  is_nullable => 0,
+                                                  size => 12 );
+
+$field_bigserial_sql = SQL::Translator::Producer::PostgreSQL::create_field($field_bigserial);
+
+is($field_bigserial_sql, 'bigserial_field bigserial NOT NULL', 'Create bigserial field works (based on size)');
 
 my $field3 = SQL::Translator::Schema::Field->new( name      => 'time_field',
                                                   table => $table,
@@ -274,18 +357,30 @@ is($field4_sql, 'bytea_field bytea NOT NULL', 'Create bytea field works');
 my $field5 = SQL::Translator::Schema::Field->new( name => 'enum_field',
                                                    table => $table,
                                                    data_type => 'enum',
-                                                   extra => { list => [ 'Foo', 'Bar' ] },
+                                                   extra => { list => [ 'Foo', 'Bar', 'Ba\'z' ] },
                                                    is_auto_increment => 0,
                                                    is_nullable => 0,
                                                    is_foreign_key => 0,
                                                    is_unique => 0 );
 
-my $field5_sql = SQL::Translator::Producer::PostgreSQL::create_field($field5,{ postgres_version => 8.3 });
+my $field5_types = {};
+my $field5_sql = SQL::Translator::Producer::PostgreSQL::create_field(
+    $field5,
+    {
+        postgres_version => 8.3,
+        type_defs => $field5_types,
+    }
+);
 
 is($field5_sql, 'enum_field mytable_enum_field_type NOT NULL', 'Create real enum field works');
-
-
-
+is_deeply(
+    $field5_types,
+    { mytable_enum_field_type =>
+          "DROP TYPE IF EXISTS mytable_enum_field_type CASCADE;\n" .
+          "CREATE TYPE mytable_enum_field_type AS ENUM ('Foo', 'Bar', 'Ba''z')"
+    },
+    'Create real enum type works'
+);
 
 my $field6 = SQL::Translator::Schema::Field->new(
                                                   name      => 'character',
@@ -406,16 +501,31 @@ is($field12_sql, 'time_field timestamp NOT NULL', 'time with precision');
 my $field13 = SQL::Translator::Schema::Field->new( name => 'enum_field_with_type_name',
                                                    table => $table,
                                                    data_type => 'enum',
-                                                   extra => { list => [ 'Foo', 'Bar' ],
+                                                   extra => { list => [ 'Foo', 'Bar', 'Ba\'z' ],
                                                               custom_type_name => 'real_enum_type' },
                                                    is_auto_increment => 0,
                                                    is_nullable => 0,
                                                    is_foreign_key => 0,
                                                    is_unique => 0 );
 
-my $field13_sql = SQL::Translator::Producer::PostgreSQL::create_field($field13,{ postgres_version => 8.3 });
+my $field13_types = {};
+my $field13_sql = SQL::Translator::Producer::PostgreSQL::create_field(
+    $field13,
+    {
+        postgres_version => 8.3,
+        type_defs => $field13_types,
+    }
+);
 
 is($field13_sql, 'enum_field_with_type_name real_enum_type NOT NULL', 'Create real enum field works');
+is_deeply(
+    $field13_types,
+    { real_enum_type =>
+          "DROP TYPE IF EXISTS real_enum_type CASCADE;\n" .
+          "CREATE TYPE real_enum_type AS ENUM ('Foo', 'Bar', 'Ba''z')"
+    },
+    'Create real enum type works'
+);
 
 
 {
@@ -519,7 +629,7 @@ is($view2_sql1, $view2_sql_replace, 'correct "CREATE OR REPLACE VIEW" SQL 2');
 
 {
     my $table = SQL::Translator::Schema::Table->new( name => 'foobar', fields => [qw( foo  bar )] );
-    my $quote = { quote_table_names => '"', quote_field_names => '"' };
+    my $quote = { quote_table_names => '"' };
 
     {
         my $index = $table->add_index(name => 'myindex', fields => ['foo']);
@@ -568,6 +678,14 @@ is($view2_sql1, $view2_sql_replace, 'correct "CREATE OR REPLACE VIEW" SQL 2');
         ($def) = SQL::Translator::Producer::PostgreSQL::create_constraint($constr, $quote);
         is($def->[0], 'CONSTRAINT "constr" UNIQUE ("bar", lower(foo))', 'constraint created w/ quotes');
     }
+
+    {
+        my $index = $table->add_index(name => 'myindex', options => [{using => 'hash'}, {where => "upper(foo) = 'bar' AND bar = 'foo'"}], fields => ['bar', 'lower(foo)']);
+        my ($def) = SQL::Translator::Producer::PostgreSQL::create_index($index);
+        is($def, "CREATE INDEX myindex on foobar USING hash (bar, lower(foo)) WHERE upper(foo) = 'bar' AND bar = 'foo'", 'index using & where created');
+        ($def) = SQL::Translator::Producer::PostgreSQL::create_index($index, $quote);
+        is($def, 'CREATE INDEX "myindex" on "foobar" USING hash ("bar", lower(foo)) WHERE upper(foo) = \'bar\' AND bar = \'foo\'', 'index using & where created w/ quotes');
+    }
 }
 
 my $drop_view_opts1 = { add_drop_view => 1, no_comments => 1, postgres_version => 8.001 };
@@ -589,3 +707,5 @@ CREATE VIEW view_foo ( id, name ) AS
 ";
 
 is($drop_view_9_1_produced, $drop_view_9_1_expected, "My DROP VIEW statement for 9.1 is correct");
+
+done_testing;

@@ -136,7 +136,7 @@ sub enum_constraint {
   return (
      'CONSTRAINT ' . $self->enum_constraint_name($field_name) .
        ' CHECK (' . $self->quote($field_name) .
-       ' IN (' . join( ',', map qq('$_'), @$vals ) . '))'
+       ' IN (' . join( ',', map $self->quote_string($_), @$vals ) . '))'
   )
 }
 
@@ -198,7 +198,7 @@ sub remove_table_constraints {
 }
 
 sub drop_tables {
-   my ($self, $schema) = shift;
+   my ($self, $schema) = @_;
 
    if ($self->add_drop_table) {
       my @tables = sort { $b->order <=> $a->order } $schema->get_tables;

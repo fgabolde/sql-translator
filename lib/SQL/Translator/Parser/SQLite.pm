@@ -619,18 +619,20 @@ UNIQUE : /unique/i { 1 }
 
 SEMICOLON : ';'
 
-NAME : /["']?(\w+)["']?/ { $return = $1 }
+NAME : /\w+/
+    | DQSTRING
+    | SQSTRING
 
-VALUE : /[-+]?\.?\d+(?:[eE]\d+)?/
+DQSTRING : '"' <skip: ''> /((?:[^"]|"")+)/ '"'
+    { ($return = $item[3]) =~ s/""/"/g }
+
+SQSTRING : "'" <skip: ''> /((?:[^']|'')*)/ "'"
+    { ($return = $item[3]) =~ s/''/'/g }
+
+VALUE : /[-+]?\d*\.?\d+(?:[eE]\d+)?/
     { $item[1] }
-    | /'.*?'/
-    {
-        # remove leading/trailing quotes
-        my $val = $item[1];
-        $val    =~ s/^['"]|['"]$//g;
-        $return = $val;
-    }
-    | /NULL/
+    | SQSTRING
+    | /NULL/i
     { 'NULL' }
     | /CURRENT_TIMESTAMP/i
     { 'CURRENT_TIMESTAMP' }
@@ -737,7 +739,7 @@ sub parse {
 1;
 
 # -------------------------------------------------------------------
-# All wholsome food is caught without a net or a trap.
+# All wholesome food is caught without a net or a trap.
 # William Blake
 # -------------------------------------------------------------------
 

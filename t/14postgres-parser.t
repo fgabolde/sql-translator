@@ -8,7 +8,7 @@ use SQL::Translator::Schema::Constants;
 use Test::SQL::Translator qw(maybe_plan);
 
 BEGIN {
-    maybe_plan(140, 'SQL::Translator::Parser::PostgreSQL');
+    maybe_plan(undef, 'SQL::Translator::Parser::PostgreSQL');
     SQL::Translator::Parser::PostgreSQL->import('parse');
 }
 
@@ -29,7 +29,13 @@ my $sql = q{
         f_fk1 integer not null references t_test2 (f_id),
         f_dropped text,
         f_timestamp timestamp(0) with time zone,
-        f_timestamp2 timestamp without time zone
+        f_timestamp2 timestamp without time zone,
+        f_json json,
+        f_hstore hstore,
+        f_numarray numeric(7,2) [ ],
+        f_uuid uuid,
+        f_time time(0) with time zone,
+        f_time2 time without time zone
     );
 
     create table t_test2 (
@@ -64,6 +70,10 @@ my $sql = q{
     ON products_1
     FOR EACH ROW
     EXECUTE PROCEDURE foo();
+
+    CREATE INDEX test_index1 ON t_test1 (f_varchar);
+    CREATE INDEX test_index2 ON t_test1 USING hash (f_char, f_bool);
+    CREATE INDEX test_index3 ON t_test1 USING hash (f_bigint, f_tz) WHERE f_bigint = '1' AND f_tz IS NULL;
 
     alter table t_test1 add f_fk2 integer;
 
@@ -117,7 +127,7 @@ is( $t1->name, 't_test1', 'Table t_test1 exists' );
 is( $t1->comments, 'comment on t_test1', 'Table comment exists' );
 
 my @t1_fields = $t1->get_fields;
-is( scalar @t1_fields, 13, '13 fields in t_test1' );
+is( scalar @t1_fields, 19, '19 fields in t_test1' );
 
 my $f1 = shift @t1_fields;
 is( $f1->name, 'f_serial', 'First field is "f_serial"' );
@@ -224,6 +234,60 @@ is( $f12->default_value, undef, 'Default value is "undef"' );
 is( $f12->is_primary_key, 0, 'Field is not PK' );
 is( $f12->is_foreign_key, 0, 'Field is not FK' );
 
+my $f13 = shift @t1_fields;
+is( $f13->name, 'f_json', '13th field is "f_json"' );
+is( $f13->data_type, 'json', 'Field is Json' );
+is( $f13->is_nullable, 1, 'Field can be null' );
+is( $f13->size, 0, 'Size is "0"' );
+is( $f13->default_value, undef, 'Default value is "undef"' );
+is( $f13->is_primary_key, 0, 'Field is not PK' );
+is( $f13->is_foreign_key, 0, 'Field is not FK' );
+
+my $f14 = shift @t1_fields;
+is( $f14->name, 'f_hstore', '14th field is "f_hstore"' );
+is( $f14->data_type, 'hstore', 'Field is hstore' );
+is( $f14->is_nullable, 1, 'Field can be null' );
+is( $f14->size, 0, 'Size is "0"' );
+is( $f14->default_value, undef, 'Default value is "undef"' );
+is( $f14->is_primary_key, 0, 'Field is not PK' );
+is( $f14->is_foreign_key, 0, 'Field is not FK' );
+
+my $f15 = shift @t1_fields;
+is( $f15->name, 'f_numarray', '15th field is "f_numarray"' );
+is( $f15->data_type, 'numeric[]', 'Field is numeric[]' );
+is( $f15->is_nullable, 1, 'Field can be null' );
+is_deeply( [$f15->size], [7,2] , 'Size is "7,2"' );
+is( $f15->default_value, undef, 'Default value is "undef"' );
+is( $f15->is_primary_key, 0, 'Field is not PK' );
+is( $f15->is_foreign_key, 0, 'Field is not FK' );
+
+my $f16 = shift @t1_fields;
+is( $f16->name, 'f_uuid', '16th field is "f_uuid"' );
+is( $f16->data_type, 'uuid', 'Field is a UUID' );
+is( $f16->is_nullable, 1, 'Field can be null' );
+is( $f16->size, 0, 'Size is "0"' );
+is( $f16->default_value, undef, 'Default value is "undef"' );
+is( $f16->is_primary_key, 0, 'Field is not PK' );
+is( $f16->is_foreign_key, 0, 'Field is not FK' );
+
+my $f17 = shift @t1_fields;
+is( $f17->name, 'f_time', '17th field is "f_time"' );
+is( $f17->data_type, 'time with time zone', 'Field is a time with time zone' );
+is( $f17->is_nullable, 1, 'Field can be null' );
+is( $f17->size, 0, 'Size is "0"' );
+is( $f17->default_value, undef, 'Default value is "undef"' );
+is( $f17->is_primary_key, 0, 'Field is not PK' );
+is( $f17->is_foreign_key, 0, 'Field is not FK' );
+
+my $f18 = shift @t1_fields;
+is( $f18->name, 'f_time2', '18th field is "f_time2"' );
+is( $f18->data_type, 'time without time zone', 'Field is a time without time zone' );
+is( $f18->is_nullable, 1, 'Field can be null' );
+is( $f18->size, 0, 'Size is "0"' );
+is( $f18->default_value, undef, 'Default value is "undef"' );
+is( $f18->is_primary_key, 0, 'Field is not PK' );
+is( $f18->is_foreign_key, 0, 'Field is not FK' );
+
 # my $fk_ref2 = $f11->foreign_key_reference;
 # isa_ok( $fk_ref2, 'SQL::Translator::Schema::Constraint', 'FK' );
 # is( $fk_ref2->reference_table, 't_test2', 'FK is to "t_test2" table' );
@@ -319,3 +383,28 @@ is_deeply( scalar $trigger->database_events, [qw(insert update delete)], "Correc
 is( $trigger->perform_action_when, 'before', "Correct time for trigger");
 is( $trigger->scope, 'row', "Correct scope for trigger");
 is( $trigger->action, 'EXECUTE PROCEDURE foo()', "Correct action for trigger");
+
+# test index
+my @indices = $t1->get_indices;
+is(scalar @indices, 3, 'got three indexes');
+
+my $t1_i1 = $indices[0];
+is( $t1_i1->name, 'test_index1', 'First index is "test_index1"' );
+is( join(',', $t1_i1->fields), 'f_varchar', 'Index is on field "f_varchar"' );
+is_deeply( [ $t1_i1->options ], [], 'Index is has no options' );
+
+my $t1_i2 = $indices[1];
+is( $t1_i2->name, 'test_index2', 'Second index is "test_index2"' );
+is( join(',', $t1_i2->fields), 'f_char,f_bool', 'Index is on fields "f_char, f_bool"' );
+is_deeply( [ $t1_i2->options ], [ { using => 'hash' } ], 'Index is using hash method' );
+
+my $t1_i3 = $indices[2];
+is( $t1_i3->name, 'test_index3', 'Third index is "test_index3"' );
+is( join(',', $t1_i3->fields), 'f_bigint,f_tz', 'Index is on fields "f_bigint, f_tz"' );
+is_deeply(
+    [ $t1_i3->options ],
+    [ { using => 'hash' }, { where => "f_bigint = '1' AND f_tz IS NULL" } ],
+    'Index is using hash method and has predicate right'
+);
+
+done_testing;

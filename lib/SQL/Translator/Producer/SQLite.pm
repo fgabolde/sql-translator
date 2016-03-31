@@ -21,7 +21,7 @@ use strict;
 use warnings;
 use Data::Dumper;
 use SQL::Translator::Schema::Constants;
-use SQL::Translator::Utils qw(debug header_comment parse_dbms_version);
+use SQL::Translator::Utils qw(debug header_comment parse_dbms_version batch_alter_table_statements);
 use SQL::Translator::Generator::DDL::SQLite;
 
 our ( $DEBUG, $WARN );
@@ -225,7 +225,6 @@ sub create_table
     #
     # Indices
     #
-    my $idx_name_default = 'A';
     for my $index ( $table->get_indices ) {
         push @index_defs, create_index($index);
     }
@@ -233,10 +232,12 @@ sub create_table
     #
     # Constraints
     #
-    my $c_name_default = 'A';
     for my $c ( $table->get_constraints ) {
         if ($c->type eq "FOREIGN KEY") {
             push @field_defs, create_foreignkey($c);
+        }
+        elsif ($c->type eq "CHECK") {
+            push @field_defs, create_check_constraint($c);
         }
         next unless $c->type eq UNIQUE;
         push @constraint_defs, create_constraint($c);
@@ -245,6 +246,14 @@ sub create_table
     $create_table .= join(",\n", map { "  $_" } @field_defs ) . "\n)";
 
     return (@create, $create_table, @index_defs, @constraint_defs );
+}
+
+sub create_check_constraint {
+    my $c     = shift;
+    my $check = '';
+    $check .= 'CONSTRAINT ' . _generator->quote( $c->name ) . ' ' if $c->name;
+    $check .= 'CHECK(' . $c->expression . ')';
+    return $check;
 }
 
 sub create_foreignkey {
@@ -283,14 +292,13 @@ sub create_index
 {
     my ($index, $options) = @_;
 
-    my $name   = $index->name;
-    $name      = mk_name($name);
+    (my $index_table_name = $index->table->name) =~ s/^.+?\.//; # table name may not specify schema
+    my $name   = mk_name($index->name || "${index_table_name}_idx");
 
     my $type   = $index->type eq 'UNIQUE' ? "UNIQUE " : '';
 
     # strip any field size qualifiers as SQLite doesn't like these
     my @fields = map { s/\(\d+\)$//; _generator()->quote($_) } $index->fields;
-    (my $index_table_name = $index->table->name) =~ s/^.+?\.//; # table name may not specify schema
     $index_table_name = _generator()->quote($index_table_name);
     warn "removing schema name from '" . $index->table->name . "' to make '$index_table_name'\n" if $WARN;
     my $index_def =
@@ -304,10 +312,9 @@ sub create_constraint
 {
     my ($c, $options) = @_;
 
-    my $name   = $c->name;
-    $name      = mk_name($name);
-    my @fields = map _generator()->quote($_), $c->fields;
     (my $index_table_name = $c->table->name) =~ s/^.+?\.//; # table name may not specify schema
+    my $name   = mk_name($c->name || "${index_table_name}_idx");
+    my @fields = map _generator()->quote($_), $c->fields;
     $index_table_name = _generator()->quote($index_table_name);
     warn "removing schema name from '" . $c->table->name . "' to make '$index_table_name'\n" if $WARN;
 
@@ -345,7 +352,9 @@ sub create_trigger {
     $DB::single = 1;
     my $action = "";
     if (not ref $trigger->action) {
-      $action .= "BEGIN " . $trigger->action . " END";
+      $action = $trigger->action;
+      $action = "BEGIN " . $action . " END"
+        unless $action =~ /^ \s* BEGIN [\s\;] .*? [\s\;] END [\s\;]* $/six;
     }
     else {
       $action = $trigger->action->{for_each} . " "
@@ -374,7 +383,7 @@ sub create_trigger {
   return @statements;
 }
 
-sub alter_table { } # Noop
+sub alter_table { () } # Noop
 
 sub add_field {
   my ($field) = @_;
@@ -406,7 +415,7 @@ sub alter_drop_index {
 }
 
 sub batch_alter_table {
-  my ($table, $diffs) = @_;
+  my ($table, $diffs, $options) = @_;
 
   # If we have any of the following
   #
@@ -428,56 +437,90 @@ sub batch_alter_table {
   # Fun, eh?
   #
   # If we have rename_field we do similarly.
+  #
+  # We create the temporary table as a copy of the new table, copy all data
+  # to temp table, create new table and then copy as appropriate taking note
+  # of renamed fields.
 
   my $table_name = $table->name;
-  my $renaming = $diffs->{rename_table} && @{$diffs->{rename_table}};
 
   if ( @{$diffs->{rename_field}} == 0 &&
        @{$diffs->{alter_field}}  == 0 &&
        @{$diffs->{drop_field}}   == 0
        ) {
-#    return join("\n", map {
-    return map {
-        my $meth = __PACKAGE__->can($_) or die __PACKAGE__ . " cant $_";
-        map { my $sql = $meth->(ref $_ eq 'ARRAY' ? @$_ : $_); $sql ?  ("$sql") : () } @{ $diffs->{$_} }
-
-      } grep { @{$diffs->{$_}} }
-    qw/rename_table
-       alter_drop_constraint
-       alter_drop_index
-       drop_field
-       add_field
-       alter_field
-       rename_field
-       alter_create_index
-       alter_create_constraint
-       alter_table/;
+    return batch_alter_table_statements($diffs, $options);
   }
 
   my @sql;
-  my $old_table = $renaming ? $diffs->{rename_table}[0][0] : $table;
 
-  if(@{$diffs->{drop_field}}) {
-    $old_table =$diffs->{drop_field}[0]->table;
+  # $table is the new table but we may need an old one
+  # TODO: this is NOT very well tested at the moment so add more tests
+
+  my $old_table = $table;
+
+  if ( $diffs->{rename_table} && @{$diffs->{rename_table}} ) {
+    $old_table = $diffs->{rename_table}[0][0];
   }
+
+  my $temp_table_name = $table_name . '_temp_alter';
+
+  # CREATE TEMPORARY TABLE t1_backup(a,b);
 
   my %temp_table_fields;
   do {
-    local $table->{name} = $table_name . '_temp_alter';
-    # We only want the table - dont care about indexes on tmp table
+    local $table->{name} = $temp_table_name;
+    # We only want the table - don't care about indexes on tmp table
     my ($table_sql) = create_table($table, {no_comments => 1, temporary_table => 1});
     push @sql,$table_sql;
 
     %temp_table_fields = map { $_ => 1} $table->get_fields;
   };
 
-  push @sql, "INSERT INTO @{[_generator()->quote($table_name.'_temp_alter')]}( @{[ join(', ', map _generator()->quote($_), grep { $temp_table_fields{$_} } $old_table->get_fields)]}) SELECT @{[ join(', ', map _generator()->quote($_), grep { $temp_table_fields{$_} } $old_table->get_fields)]} FROM @{[_generator()->quote($old_table)]}",
-             "DROP TABLE @{[_generator()->quote($old_table)]}",
-             create_table($table, { no_comments => 1 }),
-             "INSERT INTO @{[_generator()->quote($table_name)]} SELECT @{[ join(', ', map _generator()->quote($_), $table->get_fields)]} FROM @{[_generator()->quote($table_name.'_temp_alter')]}",
-             "DROP TABLE @{[_generator()->quote($table_name.'_temp_alter')]}";
-  return @sql;
-#  return join("", @sql, "");
+  # record renamed fields for later
+  my %rename_field = map { $_->[1]->name => $_->[0]->name } @{$diffs->{rename_field}};
+
+  # drop added fields from %temp_table_fields
+  delete @temp_table_fields{@{$diffs->{add_field}}};
+
+  # INSERT INTO t1_backup SELECT a,b FROM t1;
+
+  push @sql, sprintf( 'INSERT INTO %s( %s) SELECT %s FROM %s',
+
+    _generator()->quote( $temp_table_name ),
+
+    join( ', ',
+        map _generator()->quote($_),
+        grep { $temp_table_fields{$_} } $table->get_fields ),
+
+    join( ', ',
+        map _generator()->quote($_),
+        map { $rename_field{$_} ? $rename_field{$_} : $_ }
+        grep { $temp_table_fields{$_} } $table->get_fields ),
+
+    _generator()->quote( $old_table->name )
+  );
+
+  # DROP TABLE t1;
+
+  push @sql, sprintf('DROP TABLE %s', _generator()->quote($old_table->name));
+
+  # CREATE TABLE t1(a,b);
+
+  push @sql, create_table($table, { no_comments => 1 });
+
+  # INSERT INTO t1 SELECT a,b FROM t1_backup;
+
+  push @sql, sprintf('INSERT INTO %s SELECT %s FROM %s',
+    _generator()->quote($table_name),
+    join(', ', map _generator()->quote($_), $table->get_fields),
+    _generator()->quote($temp_table_name)
+  );
+
+  # DROP TABLE t1_backup;
+
+  push @sql, sprintf('DROP TABLE %s', _generator()->quote($temp_table_name));
+
+  return wantarray ? @sql : join(";\n", @sql);
 }
 
 sub drop_table {

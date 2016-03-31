@@ -4,6 +4,9 @@ use strict;
 use warnings;
 use Digest::SHA qw( sha1_hex );
 use File::Spec;
+use Scalar::Util qw(blessed);
+use Try::Tiny;
+use Carp qw(carp croak);
 
 our $VERSION = '1.59';
 our $DEFAULT_COMMENT = '-- ';
@@ -12,7 +15,9 @@ use base qw(Exporter);
 our @EXPORT_OK = qw(
     debug normalize_name header_comment parse_list_arg truncate_id_uniquely
     $DEFAULT_COMMENT parse_mysql_version parse_dbms_version
-    ddl_parser_instance
+    ddl_parser_instance batch_alter_table_statements
+    uniq throw ex2err carp_ro
+    normalize_quote_options
 );
 use constant COLLISION_TAG_LENGTH => 8;
 
@@ -54,6 +59,46 @@ sub normalize_name {
     $name =~ s/_$//;
 
     return $name;
+}
+
+sub normalize_quote_options {
+    my $config = shift;
+
+    my $quote;
+    if (defined $config->{quote_identifiers}) {
+      $quote = $config->{quote_identifiers};
+
+      for (qw/quote_table_names quote_field_names/) {
+        carp "Ignoring deprecated parameter '$_', since 'quote_identifiers' is supplied"
+          if defined $config->{$_}
+      }
+    }
+    # Legacy one set the other is not
+    elsif (
+      defined $config->{'quote_table_names'}
+        xor
+      defined $config->{'quote_field_names'}
+    ) {
+      if (defined $config->{'quote_table_names'}) {
+        carp "Explicitly disabling the deprecated 'quote_table_names' implies disabling 'quote_identifiers' which in turn implies disabling 'quote_field_names'"
+          unless $config->{'quote_table_names'};
+        $quote = $config->{'quote_table_names'} ? 1 : 0;
+      }
+      else {
+        carp "Explicitly disabling the deprecated 'quote_field_names' implies disabling 'quote_identifiers' which in turn implies disabling 'quote_table_names'"
+          unless $config->{'quote_field_names'};
+        $quote = $config->{'quote_field_names'} ? 1 : 0;
+      }
+    }
+    # Legacy both are set
+    elsif(defined $config->{'quote_table_names'}) {
+      croak 'Setting quote_table_names and quote_field_names to conflicting values is no longer supported'
+        if ($config->{'quote_table_names'} xor $config->{'quote_field_names'});
+
+      $quote = $config->{'quote_table_names'} ? 1 : 0;
+    }
+
+    return $quote;
 }
 
 sub header_comment {
@@ -216,7 +261,8 @@ sub ddl_parser_instance {
     });
 
 # this is disabled until RT#74593 is resolved
-=begin for general sadness
+
+=begin sadness
 
     unless ($parsers_libdir) {
 
@@ -276,6 +322,9 @@ sub ddl_parser_instance {
     }
 
     return $precompiled_mod->new;
+
+=end sadness
+
 =cut
 
 }
@@ -302,6 +351,76 @@ sub _find_co_root {
         ? $root
         : undef
     ;
+}
+
+{
+    package SQL::Translator::Utils::Error;
+
+    use overload
+        '""' => sub { ${$_[0]} },
+        fallback => 1;
+
+    sub new {
+        my ($class, $msg) = @_;
+        bless \$msg, $class;
+    }
+}
+
+sub uniq {
+  my( %seen, $seen_undef, $numeric_preserving_copy );
+  grep { not (
+    defined $_
+      ? $seen{ $numeric_preserving_copy = $_ }++
+      : $seen_undef++
+  ) } @_;
+}
+
+sub throw {
+    die SQL::Translator::Utils::Error->new($_[0]);
+}
+
+sub ex2err {
+    my ($orig, $self, @args) = @_;
+    return try {
+        $self->$orig(@args);
+    } catch {
+        die $_ unless blessed($_) && $_->isa("SQL::Translator::Utils::Error");
+        $self->error("$_");
+    };
+}
+
+sub carp_ro {
+    my ($name) = @_;
+    return sub {
+        my ($orig, $self) = (shift, shift);
+        carp "'$name' is a read-only accessor" if @_;
+        return $self->$orig;
+    };
+}
+
+sub batch_alter_table_statements {
+    my ($diff_hash, $options, @meths) = @_;
+
+    @meths = qw(
+        rename_table
+        alter_drop_constraint
+        alter_drop_index
+        drop_field
+        add_field
+        alter_field
+        rename_field
+        alter_create_index
+        alter_create_constraint
+        alter_table
+    ) unless @meths;
+
+    my $package = caller;
+
+    return map {
+        my $meth = $package->can($_) or die "$package cant $_";
+        map { $meth->(ref $_ eq 'ARRAY' ? @$_ : $_, $options) } @{ $diff_hash->{$_} }
+    } grep { @{$diff_hash->{$_} || []} }
+        @meths;
 }
 
 1;
@@ -451,6 +570,70 @@ version specifications:
 Takes a version string (X.Y.Z) or perl style (XX.YYYZZZ) and a target ('perl'
 or 'native') transforms the string to the given target style.
 to
+
+=head2 throw
+
+Throws the provided string as an object that will stringify back to the
+original string.  This stops it from being mangled by L<Moo>'s C<isa>
+code.
+
+=head2 ex2err
+
+Wraps an attribute accessor to catch any exception raised using
+L</throw> and store them in C<< $self->error() >>, finally returning
+undef.  A reference to this function can be passed directly to
+L<Moo/around>.
+
+    around foo => \&ex2err;
+
+    around bar => sub {
+        my ($orig, $self) = (shift, shift);
+        return ex2err($orig, $self, @_) if @_;
+        ...
+    };
+
+=head2 carp_ro
+
+Takes a field name and returns a reference to a function can be used
+L<around|Moo/around> a read-only accessor to make it L<carp|Carp>
+instead of die when passed an argument.
+
+=head2 batch_alter_table_statements
+
+Takes diff and argument hashes as passed to
+L<batch_alter_table|SQL::Translator::Diff/batch_alter_table($table, $hash, $args) (optional)>
+and an optional list of producer functions to call on the calling package.
+Returns the list of statements returned by the producer functions.
+
+If no producer functions are specified, the following functions in the
+calling package are called:
+
+=over
+
+=item 1. rename_table
+
+=item 2. alter_drop_constraint
+
+=item 3. alter_drop_index
+
+=item 4. drop_field
+
+=item 5. add_field
+
+=item 5. alter_field
+
+=item 6. rename_field
+
+=item 7. alter_create_index
+
+=item 8. alter_create_constraint
+
+=item 9. alter_table
+
+=back
+
+If the corresponding array in the hash has any elements, but the
+caller doesn't implement that function, an exception is thrown.
 
 =head1 AUTHORS
 

@@ -7,30 +7,24 @@ use SQL::Translator;
 use SQL::Translator::Schema::Constants;
 use Test::SQL::Translator qw(maybe_plan table_ok);
 
-BEGIN {
-    maybe_plan(61, 'SQL::Translator::Parser::DBI::PostgreSQL');
-    SQL::Translator::Parser::DBI::PostgreSQL->import('parse');
-}
-
-use_ok('SQL::Translator::Parser::DBI::PostgreSQL');
+maybe_plan(undef, 'SQL::Translator::Parser::DBI::PostgreSQL');
 
 my @dsn =
   $ENV{DBICTEST_PG_DSN} ? @ENV{ map { "DBICTEST_PG_$_" } qw/DSN USER PASS/ }
 : $ENV{DBI_DSN} ? @ENV{ map { "DBI_$_" } qw/DSN USER PASS/ }
-: ( "dbi:Pg:dbname=postgres", '', '' );
+: plan skip_all => 'Set $ENV{DBICTEST_PG_DSN}, _USER and _PASS to run this test';
 
 my $dbh = eval {
   DBI->connect(@dsn, {AutoCommit => 1, RaiseError=>1,PrintError => 1} );
 };
 
-SKIP: {
-    if (my $err = ($@ || $DBI::err )) {
-      chomp $err;
-      skip "No connection to test db. DBI says '$err'", 60;
-    }
+if (my $err = ($@ || $DBI::err )) {
+    chomp $err;
+    plan skip_all => "No connection to test db. DBI says '$err'";
+}
 
-    ok($dbh, "dbh setup correctly");
-    $dbh->do('SET client_min_messages=WARNING');
+ok($dbh, "dbh setup correctly");
+$dbh->do('SET client_min_messages=WARNING');
 
 my $sql = q[
     drop table if exists sqlt_test2;
@@ -53,8 +47,8 @@ my $sql = q[
     create table sqlt_test2 (
         f_id integer NOT NULL,
         f_int smallint,
-        primary key (f_id),
-        f_fk1 integer NOT NULL references sqlt_test1 (f_serial)
+        f_fk1 integer NOT NULL references sqlt_test1 (f_serial),
+        primary key (f_id, f_fk1)
     );
 
     CREATE TABLE sqlt_products_1 (
@@ -71,6 +65,7 @@ my $sql = q[
 
 $| = 1;
 
+$dbh->begin_work;
 $dbh->do($sql);
 
 my $t = SQL::Translator->new(
@@ -164,7 +159,7 @@ is( $t2_f3->data_type, 'integer', 'Field is an integer' );
 is( $t2_f3->is_nullable, 0, 'Field cannot be null' );
 is( $t2_f3->size, 0, 'Size is "0"' );
 is( $t2_f3->default_value, undef, 'Default value is undefined' );
-is( $t2_f3->is_primary_key, 0, 'Field is not PK' );
+is( $t2_f3->is_primary_key, 1, 'Field is PK' );
 is( $t2_f3->is_foreign_key, 1, 'Field is a FK' );
 my $fk_ref1 = $t2_f3->foreign_key_reference;
 isa_ok( $fk_ref1, 'SQL::Translator::Schema::Constraint', 'FK' );
@@ -176,18 +171,7 @@ is( scalar @t2_constraints, 1, "One constraint on table" );
 my $t2_c1 = shift @t2_constraints;
 is( $t2_c1->type, FOREIGN_KEY, "Constraint is a FK" );
 
+$dbh->rollback;
 $dbh->disconnect;
-} # end of SKIP block
 
-END {
-  if ($dbh) {
-    for (
-      'drop table if exists sqlt_test2',
-      'drop table if exists sqlt_test1',
-      'drop table if exists sqlt_products_1',
-    ) {
-      local $SIG{__WARN__} = sub {};
-      eval { $dbh->do($_) };
-    }
-  }
-}
+done_testing();

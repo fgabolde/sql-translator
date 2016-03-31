@@ -104,7 +104,7 @@ sub filter {
         $schema->drop_table($gtbl);
     }
 
-    # Add globalis to tables
+    # Add globals to tables
     foreach my $tbl ( $schema->get_tables ) {
 
         foreach my $new_fld ( @global_fields ) {
@@ -147,7 +147,7 @@ filter.
 
 =head1 SEE ALSO
 
-L<perl(1)>, L<SQL::Translator>
+C<perl(1)>, L<SQL::Translator>
 
 =head1 BUGS
 

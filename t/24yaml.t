@@ -13,7 +13,8 @@ BEGIN {
 }
 
 my $sqlt_version = $SQL::Translator::VERSION;
-my $yaml = <<YAML;
+use YAML qw(Dump Load);
+my $yaml = Dump(Load(<<YAML));
 ---
 schema:
   procedures: {}
@@ -86,6 +87,9 @@ schema:
           size:
             - 20
         person_id:
+          comments:
+            - field comment 1
+            - field comment 2
           data_type: INTEGER
           default_value: ~
           is_auto_increment: 1

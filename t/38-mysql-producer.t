@@ -19,7 +19,7 @@ use FindBin qw/$Bin/;
 #=============================================================================
 
 BEGIN {
-    maybe_plan(73,
+    maybe_plan(75,
         'YAML',
         'SQL::Translator::Producer::MySQL',
         'Test::Differences',
@@ -67,6 +67,20 @@ schema:
             mysql_charset: utf8
             mysql_collate: utf8_general_ci
           order: 4
+        timestamp:
+          data_type: timestamp
+          default_value: !!perl/ref
+            =: CURRENT_TIMESTAMP
+          extra:
+            on update: !!perl/ref
+              =: CURRENT_TIMESTAMP
+          is_nullable: 1
+          is_primary_key: 0
+          is_unique: 0
+          name: timestamp
+          order: 5
+          size:
+            - 0
       constraints:
         - type: UNIQUE
           fields:
@@ -103,7 +117,7 @@ schema:
             list:
               - foo
               - bar
-              - baz
+              - ba'z
       indices:
         - type: NORMAL
           fields:
@@ -157,7 +171,7 @@ schema:
             list:
               - foo
               - bar
-              - baz
+              - ba'z
       indices:
         - type: NORMAL
           fields:
@@ -187,20 +201,21 @@ my @stmts = (
 
 "DROP TABLE IF EXISTS `thing`",
 "CREATE TABLE `thing` (
-  `id` unsigned int NULL auto_increment,
+  `id` unsigned int NOT NULL auto_increment,
   `name` varchar(32) NULL,
   `swedish_name` varchar(32) character set swe7 NULL,
   `description` text character set utf8 collate utf8_general_ci NULL,
+  `timestamp` timestamp on update CURRENT_TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   UNIQUE `idx_unique_name` (`name`)
 ) ENGINE=InnoDB DEFAULT CHARACTER SET latin1 COLLATE latin1_danish_ci",
 
 "DROP TABLE IF EXISTS `some`.`thing2`",
 "CREATE TABLE `some`.`thing2` (
-  `id` integer NULL,
-  `foo` integer NULL,
+  `id` integer NOT NULL,
+  `foo` integer NOT NULL,
   `foo2` integer NULL,
-  `bar_set` set('foo', 'bar', 'baz') NULL,
+  `bar_set` set('foo', 'bar', 'ba''z') NULL,
   INDEX `index_1` (`id`),
   INDEX `really_long_name_bigger_than_64_chars_aaaaaaaaaaaaaaaaa_aed44c47` (`id`),
   INDEX (`foo`),
@@ -212,10 +227,10 @@ my @stmts = (
 
 "DROP TABLE IF EXISTS `some`.`thing3`",
 "CREATE TABLE `some`.`thing3` (
-  `id` integer NULL,
-  `foo` integer NULL,
+  `id` integer NOT NULL,
+  `foo` integer NOT NULL,
   `foo2` integer NULL,
-  `bar_set` set('foo', 'bar', 'baz') NULL,
+  `bar_set` set('foo', 'bar', 'ba''z') NULL,
   INDEX `index_1` (`id`),
   INDEX `really_long_name_bigger_than_64_chars_aaaaaaaaaaaaaaaaa_aed44c47` (`id`),
   INDEX (`foo`),
@@ -784,4 +799,47 @@ EOV
     my $options = {quote_table_names => '`'};
     is(SQL::Translator::Producer::MySQL::alter_drop_constraint($constraint,$options),
        'ALTER TABLE `table` DROP PRIMARY KEY','valid drop primary key');
+}
+
+{
+    my $schema = SQL::Translator::Schema->new();
+    my $table = $schema->add_table( name => 'foo', fields => ['bar'] );
+
+    {
+        my $trigger = $schema->add_trigger(
+            name                => 'mytrigger',
+            perform_action_when => 'before',
+            database_events     => 'update',
+            on_table            => 'foo',
+            fields              => ['bar'],
+            action              => 'BEGIN baz(); END'
+        );
+        my ($def) = SQL::Translator::Producer::MySQL::create_trigger($trigger);
+        my $expected
+          = "--\n"
+          . "-- Trigger mytrigger\n"
+          . "--\n"
+          . "CREATE TRIGGER mytrigger before update ON foo\n"
+          . "  FOR EACH ROW BEGIN baz(); END";
+        is($def, $expected, 'trigger created');
+    }
+
+    {
+        my $trigger = $schema->add_trigger(
+            name                => 'mytrigger2',
+            perform_action_when => 'after',
+            database_events     => ['insert'],
+            on_table            => 'foo',
+            fields              => ['bar'],
+            action              => 'baz()'
+        );
+        my ($def) = SQL::Translator::Producer::MySQL::create_trigger($trigger);
+        my $expected
+          = "--\n"
+          . "-- Trigger mytrigger2\n"
+          . "--\n"
+          . "CREATE TRIGGER mytrigger2 after insert ON foo\n"
+          . "  FOR EACH ROW BEGIN baz(); END";
+        is($def, $expected, 'trigger created');
+    }
 }
